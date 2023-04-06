@@ -14,6 +14,8 @@ from langchain.memory import ChatMessageHistory
 from langchain.memory import ConversationBufferMemory
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import LLMChain
+from langchain.vectorstores import Pinecone
+import pinecone
 
 
 def GetEmbeddings(_directory_path,_index_file_name, _splitter_class, _embeddings, _gen_emb=False, _chunk_size=1000, _chunk_overlap=0,_separators=None):
@@ -33,6 +35,29 @@ def GetEmbeddings(_directory_path,_index_file_name, _splitter_class, _embeddings
     else:
         db = FAISS.load_local(_index_file_name, embeddings)
     return db
+
+def GetEmbeddingsPineCone(_directory_path,_index_name, _splitter_class, _embeddings, _gen_emb=False, _chunk_size=1000, _chunk_overlap=0,_separators=None):
+
+    pinecone.init(
+        api_key=os.environ["PINECONE_API_KEY"],  # find at app.pinecone.io
+        environment="us-east4-gcp"  # next to api key in console
+    )
+    if _gen_emb:
+        # List all files in the directory
+        files = os.listdir(_directory_path)
+        # Iterate over each file in the directory
+        docs = []
+        for file_name in files:
+            if file_name.endswith('.txt'):
+                loader = TextLoader(os.path.join(_directory_path, file_name))
+                documents = loader.load()
+                text_splitter = _splitter_class(chunk_size= _chunk_size, chunk_overlap=_chunk_overlap, separators=_separators)
+                docs.extend(text_splitter.split_documents(documents))
+        db = Pinecone.from_documents(docs, _embeddings,index_name=_index_name)
+    else:
+        db = Pinecone.from_existing_index(index_name=_index_name,embedding=_embeddings)
+    return db
+
 
 def GetQuestion( _query, _memory, _temperature=0,_max_tokens=256):
     _template = """Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question. Question should be in Polish. 
@@ -96,13 +121,22 @@ if sys.argv[1].lower() == "gen":
 if sys.argv[2].lower() == "trace":
     print_context = True
 
+if sys.argv[3].lower() == "PINECONE":
+    vestorstore= "PINECONE"
+else:
+    vestorstore= "FAISS"
+
 print (f" ===== DocBot V .001 ====== [gen embeddings: {GEN_EMBEDDINGS} trace: {print_context}]")
 
 embeddings = OpenAIEmbeddings()
 history = ChatMessageHistory()
 #memory = ConversationBufferMemory(return_messages=True,memory_key="chat_history")
 memory = ConversationBufferWindowMemory(return_messages=True,memory_key="chat_history",k=4)
-db = GetEmbeddings("input", "srch_idx", RecursiveCharacterTextSplitter, embeddings, GEN_EMBEDDINGS,
+if vestorstore == "FAISS":
+    db = GetEmbeddings("input", "srch_idx", RecursiveCharacterTextSplitter, embeddings, GEN_EMBEDDINGS,
+                   _chunk_size=3000, _chunk_overlap=0, _separators=[ "\n\n", "\n"," "])
+elif vestorstore == "PINECONE":
+    db = GetEmbeddingsPineCone("input", "docchat", RecursiveCharacterTextSplitter, embeddings, GEN_EMBEDDINGS,
                    _chunk_size=3000, _chunk_overlap=0, _separators=[ "\n\n", "\n"," "])
 
 while True:
